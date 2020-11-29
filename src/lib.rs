@@ -2,6 +2,7 @@ use bitpattern::bitpattern;
 use log::debug;
 use once_cell::sync::OnceCell;
 use std::convert::{TryFrom, TryInto};
+use std::str::FromStr;
 use thiserror::Error;
 
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
@@ -80,10 +81,47 @@ impl TryFrom<u8> for Level {
     }
 }
 
+// For level_idc=11 and profile_idc=0x42, 0x4D, or 0x58, the constraint set3 flag specifies if
+// level 1b or level 1.1 is used.
+const CONSTRAINT_SET3_FLAG: u8 = 0x10;
+
+// Class for converting between profile_idc/profile_iop to Profile.
+struct ProfilePattern {
+    profile_idc: u8,
+    profile_iop: fn(u8) -> bool,
+    profile: Profile,
+}
+
+#[derive(Debug, Error, Eq, PartialEq)]
+pub enum ParseProfileLevelIdError {
+    #[error("Failed to parse string as hexadecimal number")]
+    FailedToParseNumber,
+    #[error("String should consist of 3 bytes in hexadecimal format, received {0}")]
+    WrongLength(usize),
+    #[error("Unrecognizable level_idc {0}")]
+    UnrecognizableLevel(u8),
+    #[error("Unrecognizable profile_idc/profile_iop combination")]
+    UnrecognizableCombination,
+    #[error("Unrecognizable H264 profile level id")]
+    Unrecognizable,
+}
+
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+// Private fields make sure we don't have to worry about incorrect combinations of profile and level
+// that are provided from the outside, keeping only valid invariants
 pub struct ProfileLevelId {
-    pub profile: Profile,
-    pub level: Level,
+    profile: Profile,
+    level: Level,
+}
+
+impl ProfileLevelId {
+    pub fn profile(&self) -> Profile {
+        self.profile
+    }
+
+    pub fn level(&self) -> Level {
+        self.level
+    }
 }
 
 impl Default for ProfileLevelId {
@@ -105,154 +143,137 @@ impl Default for ProfileLevelId {
     }
 }
 
-// For level_idc=11 and profile_idc=0x42, 0x4D, or 0x58, the constraint set3 flag specifies if
-// level 1b or level 1.1 is used.
-const CONSTRAINT_SET3_FLAG: u8 = 0x10;
+impl FromStr for ProfileLevelId {
+    type Err = ParseProfileLevelIdError;
 
-// Class for converting between profile_idc/profile_iop to Profile.
-struct ProfilePattern {
-    profile_idc: u8,
-    profile_iop: fn(u8) -> bool,
-    profile: Profile,
-}
-
-/// Parse profile level id that is represented as a string of 3 hex bytes.
-/// `None` will be returned if the string is not a recognized H264 profile level id.
-pub fn parse_profile_level_id(str: &str) -> Option<ProfileLevelId> {
-    // The string should consist of 3 bytes in hexadecimal format.
-    if str.len() != 6 {
-        return None;
-    }
-
-    let profile_level_id_numeric = u32::from_str_radix(str, 16).ok()?;
-
-    if profile_level_id_numeric == 0 {
-        return None;
-    }
-
-    // Separate into three bytes.
-    let level_idc = (profile_level_id_numeric & 0xFF) as u8;
-    let profile_iop = ((profile_level_id_numeric >> 8) & 0xFF) as u8;
-    let profile_idc = ((profile_level_id_numeric >> 16) & 0xFF) as u8;
-
-    // Parse level based on level_idc and constraint set 3 flag.
-    let level = match level_idc.try_into() {
-        Ok(level) => match level {
-            Level::Level11 => {
-                if profile_iop & CONSTRAINT_SET3_FLAG != 0 {
-                    Level::Level1b
-                } else {
-                    Level::Level11
-                }
-            }
-            level => level,
-        },
-        _ => {
-            debug!(
-                "parse_profile_level_id() | unrecognized level_idc: {}",
-                level_idc
-            );
-
-            return None;
+    /// Parse profile level id that is represented as a string of 3 hex bytes.
+    fn from_str(str: &str) -> Result<Self, Self::Err> {
+        // The string should consist of 3 bytes in hexadecimal format.
+        if str.len() != 6 {
+            return Err(ParseProfileLevelIdError::WrongLength(str.len()));
         }
-    };
 
-    static PROFILE_LEVEL_PATTERNS: OnceCell<[ProfilePattern; 8]> = OnceCell::new();
-    let profile_level_pattern = PROFILE_LEVEL_PATTERNS.get_or_init(|| {
-        // This is from https://tools.ietf.org/html/rfc6184#section-8.1.
-        [
-            ProfilePattern {
-                profile_idc: 0x42,
-                profile_iop: |input| bitpattern!("?1??0000", input).is_some(),
-                profile: Profile::ConstrainedBaseline,
-            },
-            ProfilePattern {
-                profile_idc: 0x4D,
-                profile_iop: |input| bitpattern!("1???0000", input).is_some(),
-                profile: Profile::ConstrainedBaseline,
-            },
-            ProfilePattern {
-                profile_idc: 0x58,
-                profile_iop: |input| bitpattern!("11??0000", input).is_some(),
-                profile: Profile::ConstrainedBaseline,
-            },
-            ProfilePattern {
-                profile_idc: 0x42,
-                profile_iop: |input| bitpattern!("?0??0000", input).is_some(),
-                profile: Profile::Baseline,
-            },
-            ProfilePattern {
-                profile_idc: 0x58,
-                profile_iop: |input| bitpattern!("10??0000", input).is_some(),
-                profile: Profile::Baseline,
-            },
-            ProfilePattern {
-                profile_idc: 0x4D,
-                profile_iop: |input| bitpattern!("0?0?0000", input).is_some(),
-                profile: Profile::Main,
-            },
-            ProfilePattern {
-                profile_idc: 0x64,
-                profile_iop: |input| bitpattern!("00000000", input).is_some(),
-                profile: Profile::High,
-            },
-            ProfilePattern {
-                profile_idc: 0x64,
-                profile_iop: |input| bitpattern!("00001100", input).is_some(),
-                profile: Profile::ConstrainedHigh,
-            },
-        ]
-    });
-
-    // Parse profile_idc/profile_iop into a Profile enum.
-    for pattern in profile_level_pattern.iter() {
-        if profile_idc == pattern.profile_idc && (pattern.profile_iop)(profile_iop) {
-            return Some(ProfileLevelId {
-                profile: pattern.profile,
-                level,
-            });
-        }
-    }
-
-    debug!("parse_profile_level_id() | unrecognized profile_idc/profile_iop combination");
-
-    None
-}
-
-/// Returns canonical string representation as three hex bytes of the profile level id, or returns
-/// `None` for invalid profile level ids.
-pub fn profile_level_id_to_string(profile_level_id: ProfileLevelId) -> Option<String> {
-    // Handle special case level == 1b.
-    if profile_level_id.level == Level::Level1b {
-        return match profile_level_id.profile {
-            Profile::ConstrainedBaseline => Some("42f00b".to_string()),
-            Profile::Baseline => Some("42100b".to_string()),
-            Profile::Main => Some("4d100b".to_string()),
-            // Level 1b is not allowed for other profiles.
-            _ => {
-                debug!(
-                    "profile_level_id_to_string() | Level 1b not is allowed for profile:{:?}",
-                    profile_level_id.profile,
-                );
-
-                None
+        let profile_level_id_numeric = match u32::from_str_radix(str, 16) {
+            Ok(profile_level_id_numeric) => profile_level_id_numeric,
+            Err(_) => {
+                return Err(ParseProfileLevelIdError::FailedToParseNumber);
             }
         };
+
+        if profile_level_id_numeric == 0 {
+            return Err(ParseProfileLevelIdError::Unrecognizable);
+        }
+
+        // Separate into three bytes.
+        let level_idc = (profile_level_id_numeric & 0xFF) as u8;
+        let profile_iop = ((profile_level_id_numeric >> 8) & 0xFF) as u8;
+        let profile_idc = ((profile_level_id_numeric >> 16) & 0xFF) as u8;
+
+        // Parse level based on level_idc and constraint set 3 flag.
+        let level = match level_idc.try_into() {
+            Ok(level) => match level {
+                Level::Level11 => {
+                    if profile_iop & CONSTRAINT_SET3_FLAG != 0 {
+                        Level::Level1b
+                    } else {
+                        Level::Level11
+                    }
+                }
+                level => level,
+            },
+            _ => {
+                return Err(ParseProfileLevelIdError::UnrecognizableLevel(level_idc));
+            }
+        };
+
+        static PROFILE_LEVEL_PATTERNS: OnceCell<[ProfilePattern; 8]> = OnceCell::new();
+        let profile_level_pattern = PROFILE_LEVEL_PATTERNS.get_or_init(|| {
+            // This is from https://tools.ietf.org/html/rfc6184#section-8.1.
+            [
+                ProfilePattern {
+                    profile_idc: 0x42,
+                    profile_iop: |input| bitpattern!("?1??0000", input).is_some(),
+                    profile: Profile::ConstrainedBaseline,
+                },
+                ProfilePattern {
+                    profile_idc: 0x4D,
+                    profile_iop: |input| bitpattern!("1???0000", input).is_some(),
+                    profile: Profile::ConstrainedBaseline,
+                },
+                ProfilePattern {
+                    profile_idc: 0x58,
+                    profile_iop: |input| bitpattern!("11??0000", input).is_some(),
+                    profile: Profile::ConstrainedBaseline,
+                },
+                ProfilePattern {
+                    profile_idc: 0x42,
+                    profile_iop: |input| bitpattern!("?0??0000", input).is_some(),
+                    profile: Profile::Baseline,
+                },
+                ProfilePattern {
+                    profile_idc: 0x58,
+                    profile_iop: |input| bitpattern!("10??0000", input).is_some(),
+                    profile: Profile::Baseline,
+                },
+                ProfilePattern {
+                    profile_idc: 0x4D,
+                    profile_iop: |input| bitpattern!("0?0?0000", input).is_some(),
+                    profile: Profile::Main,
+                },
+                ProfilePattern {
+                    profile_idc: 0x64,
+                    profile_iop: |input| bitpattern!("00000000", input).is_some(),
+                    profile: Profile::High,
+                },
+                ProfilePattern {
+                    profile_idc: 0x64,
+                    profile_iop: |input| bitpattern!("00001100", input).is_some(),
+                    profile: Profile::ConstrainedHigh,
+                },
+            ]
+        });
+
+        // Parse profile_idc/profile_iop into a Profile enum.
+        for pattern in profile_level_pattern.iter() {
+            if profile_idc == pattern.profile_idc && (pattern.profile_iop)(profile_iop) {
+                return Ok(ProfileLevelId {
+                    profile: pattern.profile,
+                    level,
+                });
+            }
+        }
+
+        Err(ParseProfileLevelIdError::UnrecognizableCombination)
     }
+}
 
-    let profile_idc_iop_string = match profile_level_id.profile {
-        Profile::ConstrainedBaseline => "42e0",
-        Profile::Baseline => "4200",
-        Profile::Main => "4d00",
-        Profile::ConstrainedHigh => "640c",
-        Profile::High => "6400",
-    };
+impl ToString for ProfileLevelId {
+    /// Returns canonical string representation as three hex bytes of the profile level id, or returns
+    fn to_string(&self) -> String {
+        // Handle special case level == 1b.
+        if self.level == Level::Level1b {
+            return match self.profile {
+                Profile::ConstrainedBaseline => "42f00b".to_string(),
+                Profile::Baseline => "42100b".to_string(),
+                Profile::Main => "4d100b".to_string(),
+                // Level 1b is not allowed for other profiles.
+                _ => {
+                    // Invalid invariants are impossible to construct outside of this library
+                    unreachable!()
+                }
+            };
+        }
 
-    let s = format!(
-        "{}{:02x}",
-        profile_idc_iop_string, profile_level_id.level as u8
-    );
-    Some(s)
+        let profile_idc_iop_string = match self.profile {
+            Profile::ConstrainedBaseline => "42e0",
+            Profile::Baseline => "4200",
+            Profile::Main => "4d00",
+            Profile::ConstrainedHigh => "640c",
+            Profile::High => "6400",
+        };
+
+        format!("{}{:02x}", profile_idc_iop_string, self.level as u8)
+    }
 }
 
 /// Returns `true` if the parameters have the same H264 profile, i.e. the same H264 profile
@@ -262,11 +283,11 @@ pub fn is_same_profile(
     remote_profile_level_id: Option<&str>,
 ) -> bool {
     let local_profile_level_id = match local_profile_level_id {
-        Some(s) => parse_profile_level_id(s),
+        Some(s) => s.parse::<ProfileLevelId>().ok(),
         None => Some(ProfileLevelId::default()),
     };
     let remote_profile_level_id = match remote_profile_level_id {
-        Some(s) => parse_profile_level_id(s),
+        Some(s) => s.parse::<ProfileLevelId>().ok(),
         None => Some(ProfileLevelId::default()),
     };
 
@@ -351,10 +372,10 @@ pub fn generate_profile_level_id_for_answer(
     );
 
     // Return the resulting profile-level-id for the answer parameters.
-    return Ok(Some(ProfileLevelId {
+    Ok(Some(ProfileLevelId {
         profile: local_profile_level_id.profile,
         level: answer_level,
-    }));
+    }))
 }
 
 // Compare H264 levels and handle the level 1b case.
@@ -383,43 +404,43 @@ mod tests {
     #[test]
     fn parsing_invalid() {
         // Malformed strings.
-        assert_eq!(parse_profile_level_id(""), None);
-        assert_eq!(parse_profile_level_id(" 42e01f"), None);
-        assert_eq!(parse_profile_level_id("4242e01f"), None);
-        assert_eq!(parse_profile_level_id("e01f"), None);
-        assert_eq!(parse_profile_level_id("gggggg"), None);
+        assert_eq!("".parse::<ProfileLevelId>().is_ok(), false);
+        assert_eq!(" 42e01f".parse::<ProfileLevelId>().is_ok(), false);
+        assert_eq!("4242e01f".parse::<ProfileLevelId>().is_ok(), false);
+        assert_eq!("e01f".parse::<ProfileLevelId>().is_ok(), false);
+        assert_eq!("gggggg".parse::<ProfileLevelId>().is_ok(), false);
 
         // Invalid level.
-        assert_eq!(parse_profile_level_id("42e000"), None);
-        assert_eq!(parse_profile_level_id("42e00f"), None);
-        assert_eq!(parse_profile_level_id("42e0ff"), None);
+        assert_eq!("42e000".parse::<ProfileLevelId>().is_ok(), false);
+        assert_eq!("42e00f".parse::<ProfileLevelId>().is_ok(), false);
+        assert_eq!("42e0ff".parse::<ProfileLevelId>().is_ok(), false);
 
         // Invalid profile.
-        assert_eq!(parse_profile_level_id("42e11f"), None);
-        assert_eq!(parse_profile_level_id("58601f"), None);
-        assert_eq!(parse_profile_level_id("64e01f"), None);
+        assert_eq!("42e11f".parse::<ProfileLevelId>().is_ok(), false);
+        assert_eq!("58601f".parse::<ProfileLevelId>().is_ok(), false);
+        assert_eq!("64e01f".parse::<ProfileLevelId>().is_ok(), false);
     }
 
     #[test]
     fn parsing_level() {
         assert_eq!(
-            parse_profile_level_id("42e01f").unwrap().level,
+            "42e01f".parse::<ProfileLevelId>().unwrap().level,
             Level::Level31
         );
         assert_eq!(
-            parse_profile_level_id("42e00b").unwrap().level,
+            "42e00b".parse::<ProfileLevelId>().unwrap().level,
             Level::Level11
         );
         assert_eq!(
-            parse_profile_level_id("42f00b").unwrap().level,
+            "42f00b".parse::<ProfileLevelId>().unwrap().level,
             Level::Level1b
         );
         assert_eq!(
-            parse_profile_level_id("42C02A").unwrap().level,
+            "42C02A".parse::<ProfileLevelId>().unwrap().level,
             Level::Level42
         );
         assert_eq!(
-            parse_profile_level_id("640c34").unwrap().level,
+            "640c34".parse::<ProfileLevelId>().unwrap().level,
             Level::Level52
         );
     }
@@ -427,19 +448,19 @@ mod tests {
     #[test]
     fn parsed_constrained_baseline() {
         assert_eq!(
-            parse_profile_level_id("42e01f").unwrap().profile,
+            "42e01f".parse::<ProfileLevelId>().unwrap().profile,
             Profile::ConstrainedBaseline,
         );
         assert_eq!(
-            parse_profile_level_id("42C02A").unwrap().profile,
+            "42C02A".parse::<ProfileLevelId>().unwrap().profile,
             Profile::ConstrainedBaseline,
         );
         assert_eq!(
-            parse_profile_level_id("4de01f").unwrap().profile,
+            "4de01f".parse::<ProfileLevelId>().unwrap().profile,
             Profile::ConstrainedBaseline,
         );
         assert_eq!(
-            parse_profile_level_id("58f01f").unwrap().profile,
+            "58f01f".parse::<ProfileLevelId>().unwrap().profile,
             Profile::ConstrainedBaseline,
         );
     }
@@ -447,11 +468,11 @@ mod tests {
     #[test]
     fn parsing_baseline() {
         assert_eq!(
-            parse_profile_level_id("42a01f").unwrap().profile,
+            "42a01f".parse::<ProfileLevelId>().unwrap().profile,
             Profile::Baseline,
         );
         assert_eq!(
-            parse_profile_level_id("58A01F").unwrap().profile,
+            "58A01F".parse::<ProfileLevelId>().unwrap().profile,
             Profile::Baseline,
         );
     }
@@ -459,7 +480,7 @@ mod tests {
     #[test]
     fn parsing_main() {
         assert_eq!(
-            parse_profile_level_id("4D401f").unwrap().profile,
+            "4D401f".parse::<ProfileLevelId>().unwrap().profile,
             Profile::Main,
         );
     }
@@ -467,7 +488,7 @@ mod tests {
     #[test]
     fn parsing_high() {
         assert_eq!(
-            parse_profile_level_id("64001f").unwrap().profile,
+            "64001f".parse::<ProfileLevelId>().unwrap().profile,
             Profile::High,
         );
     }
@@ -475,7 +496,7 @@ mod tests {
     #[test]
     fn parsing_constrained_high() {
         assert_eq!(
-            parse_profile_level_id("640c1f").unwrap().profile,
+            "640c1f".parse::<ProfileLevelId>().unwrap().profile,
             Profile::ConstrainedHigh,
         );
     }
@@ -483,48 +504,48 @@ mod tests {
     #[test]
     fn to_string() {
         assert_eq!(
-            profile_level_id_to_string(ProfileLevelId {
+            ProfileLevelId {
                 profile: Profile::ConstrainedBaseline,
                 level: Level::Level31
-            })
-            .as_ref()
-            .unwrap(),
+            }
+            .to_string()
+            .as_str(),
             "42e01f",
         );
         assert_eq!(
-            profile_level_id_to_string(ProfileLevelId {
+            ProfileLevelId {
                 profile: Profile::Baseline,
                 level: Level::Level1
-            })
-            .as_ref()
-            .unwrap(),
+            }
+            .to_string()
+            .as_str(),
             "42000a",
         );
         assert_eq!(
-            profile_level_id_to_string(ProfileLevelId {
+            ProfileLevelId {
                 profile: Profile::Main,
                 level: Level::Level31
-            })
-            .as_ref()
-            .unwrap(),
+            }
+            .to_string()
+            .as_str(),
             "4d001f",
         );
         assert_eq!(
-            profile_level_id_to_string(ProfileLevelId {
+            ProfileLevelId {
                 profile: Profile::ConstrainedHigh,
                 level: Level::Level42
-            })
-            .as_ref()
-            .unwrap(),
+            }
+            .to_string()
+            .as_str(),
             "640c2a",
         );
         assert_eq!(
-            profile_level_id_to_string(ProfileLevelId {
+            ProfileLevelId {
                 profile: Profile::High,
                 level: Level::Level42
-            })
-            .as_ref()
-            .unwrap(),
+            }
+            .to_string()
+            .as_str(),
             "64002a",
         );
     }
@@ -532,86 +553,80 @@ mod tests {
     #[test]
     fn to_string_level_1b() {
         assert_eq!(
-            profile_level_id_to_string(ProfileLevelId {
+            ProfileLevelId {
                 profile: Profile::ConstrainedBaseline,
                 level: Level::Level1b
-            })
-            .as_ref()
-            .unwrap(),
+            }
+            .to_string()
+            .as_str(),
             "42f00b",
         );
         assert_eq!(
-            profile_level_id_to_string(ProfileLevelId {
+            ProfileLevelId {
                 profile: Profile::Baseline,
                 level: Level::Level1b
-            })
-            .as_ref()
-            .unwrap(),
+            }
+            .to_string()
+            .as_str(),
             "42100b",
         );
         assert_eq!(
-            profile_level_id_to_string(ProfileLevelId {
+            ProfileLevelId {
                 profile: Profile::Main,
                 level: Level::Level1b
-            })
-            .as_ref()
-            .unwrap(),
+            }
+            .to_string()
+            .as_str(),
             "4d100b",
         );
 
         assert_eq!(
-            profile_level_id_to_string(parse_profile_level_id("42e01f").unwrap())
-                .as_ref()
-                .unwrap(),
+            "42e01f"
+                .parse::<ProfileLevelId>()
+                .unwrap()
+                .to_string()
+                .as_str(),
             "42e01f",
         );
         assert_eq!(
-            profile_level_id_to_string(parse_profile_level_id("42E01F").unwrap())
-                .as_ref()
-                .unwrap(),
+            "42E01F"
+                .parse::<ProfileLevelId>()
+                .unwrap()
+                .to_string()
+                .as_str(),
             "42e01f",
         );
         assert_eq!(
-            profile_level_id_to_string(parse_profile_level_id("4d100b").unwrap())
-                .as_ref()
-                .unwrap(),
+            "4d100b"
+                .parse::<ProfileLevelId>()
+                .unwrap()
+                .to_string()
+                .as_str(),
             "4d100b",
         );
         assert_eq!(
-            profile_level_id_to_string(parse_profile_level_id("4D100B").unwrap())
-                .as_ref()
-                .unwrap(),
+            "4D100B"
+                .parse::<ProfileLevelId>()
+                .unwrap()
+                .to_string()
+                .as_str(),
             "4d100b",
         );
         assert_eq!(
-            profile_level_id_to_string(parse_profile_level_id("640c2a").unwrap())
-                .as_ref()
-                .unwrap(),
+            "640c2a"
+                .parse::<ProfileLevelId>()
+                .unwrap()
+                .to_string()
+                .as_str(),
             "640c2a",
         );
         assert_eq!(
-            profile_level_id_to_string(parse_profile_level_id("640C2A").unwrap())
-                .as_ref()
-                .unwrap(),
+            "640C2A"
+                .parse::<ProfileLevelId>()
+                .unwrap()
+                .to_string()
+                .as_str(),
             "640c2a",
-        );
-    }
-
-    #[test]
-    fn to_string_invalid() {
-        assert_eq!(
-            profile_level_id_to_string(ProfileLevelId {
-                profile: Profile::High,
-                level: Level::Level1b
-            }),
-            None,
-        );
-        assert_eq!(
-            profile_level_id_to_string(ProfileLevelId {
-                profile: Profile::ConstrainedHigh,
-                level: Level::Level1b
-            }),
-            None,
         );
     }
 
@@ -640,25 +655,25 @@ mod tests {
 
     #[test]
     fn generate_profile_level_id_for_answer_level_symmetry_capped() {
-        let low_level = parse_profile_level_id("42e015");
-        let high_level = parse_profile_level_id("42e01f");
+        let low_level = "42e015".parse::<ProfileLevelId>().ok();
+        let high_level = "42e01f".parse::<ProfileLevelId>().ok();
 
         assert_eq!(
             generate_profile_level_id_for_answer(low_level, false, high_level, false),
-            Ok(parse_profile_level_id("42e015")),
+            Ok("42e015".parse::<ProfileLevelId>().ok()),
         );
         assert_eq!(
             generate_profile_level_id_for_answer(high_level, false, low_level, false),
-            Ok(parse_profile_level_id("42e015")),
+            Ok("42e015".parse::<ProfileLevelId>().ok()),
         );
     }
 
     #[test]
     fn generate_profile_level_id_for_answer_constrained_baseline_level_asymmetry() {
-        let local_profile_level_id = parse_profile_level_id("42e01f");
+        let local_profile_level_id = "42e01f".parse::<ProfileLevelId>().ok();
         let local_level_asymmetry_allowed = true;
 
-        let remote_profile_level_id = parse_profile_level_id("42e015");
+        let remote_profile_level_id = "42e015".parse::<ProfileLevelId>().ok();
         let remote_level_asymmetry_allowed = true;
 
         assert_eq!(
@@ -668,7 +683,7 @@ mod tests {
                 remote_profile_level_id,
                 remote_level_asymmetry_allowed
             ),
-            Ok(parse_profile_level_id("42e01f")),
+            Ok("42e01f".parse::<ProfileLevelId>().ok()),
         );
     }
 }
