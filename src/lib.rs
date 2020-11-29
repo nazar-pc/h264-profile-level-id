@@ -313,12 +313,12 @@ impl ToString for ProfileLevelId {
     }
 }
 
-/// Returns `true` if string `profile-level-id` correspond to the same H264 profile (Baseline, High,
-/// etc).
+/// Returns `Some` with parsed profiles if string `profile-level-id` correspond to the same H264
+/// profile (Baseline, High, etc).
 pub fn is_same_profile(
     local_profile_level_id: Option<&str>,
     remote_profile_level_id: Option<&str>,
-) -> bool {
+) -> Option<(ProfileLevelId, ProfileLevelId)> {
     let local_profile_level_id = match local_profile_level_id {
         Some(s) => s.parse::<ProfileLevelId>().ok(),
         None => Some(ProfileLevelId::default()),
@@ -329,12 +329,15 @@ pub fn is_same_profile(
     };
 
     // Compare H264 profiles, but not levels.
-    match (local_profile_level_id, remote_profile_level_id) {
-        (Some(local_profile_level_id), Some(remote_profile_level_id)) => {
-            local_profile_level_id.profile == remote_profile_level_id.profile
+    if let (Some(local_profile_level_id), Some(remote_profile_level_id)) =
+        (local_profile_level_id, remote_profile_level_id)
+    {
+        if local_profile_level_id.profile == remote_profile_level_id.profile {
+            return Some((local_profile_level_id, remote_profile_level_id));
         }
-        _ => false,
     }
+
+    None
 }
 
 #[derive(Debug, Error, Eq, PartialEq)]
@@ -670,17 +673,17 @@ mod tests {
 
     #[test]
     fn test_is_same_profile() {
-        assert_eq!(is_same_profile(None, None), true);
-        assert_eq!(is_same_profile(Some("42e01f"), Some("42C02A"),), true);
-        assert_eq!(is_same_profile(Some("42a01f"), Some("58A01F")), true);
-        assert_eq!(is_same_profile(Some("42e01f"), None), true);
+        assert!(is_same_profile(None, None).is_some());
+        assert!(is_same_profile(Some("42e01f"), Some("42C02A")).is_some());
+        assert!(is_same_profile(Some("42a01f"), Some("58A01F")).is_some());
+        assert!(is_same_profile(Some("42e01f"), None).is_some());
     }
 
     #[test]
     fn test_is_not_same_profile() {
-        assert_eq!(is_same_profile(None, Some("4d001f")), false);
-        assert_eq!(is_same_profile(Some("42a01f"), Some("640c1f"),), false);
-        assert_eq!(is_same_profile(Some("42000a"), Some("64002a")), false);
+        assert!(is_same_profile(None, Some("4d001f")).is_none());
+        assert!(is_same_profile(Some("42a01f"), Some("640c1f")).is_none());
+        assert!(is_same_profile(Some("42000a"), Some("64002a")).is_none());
     }
 
     #[test]
