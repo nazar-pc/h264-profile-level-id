@@ -1,10 +1,14 @@
 [package]
 name = "h264-profile-level-id"
 version = "0.1.0"
-description = "WIP"
+description = "Utility to process H264 profile-level-id values"
 authors = ["Nazar Mokrynskyi <nazar@mokrynskyi.com>"]
 edition = "2018"
 license = "ISC"
+keywords = ["h264", "sdp", "webrtc"]
+documentation = "https://docs.rs/h264-profile-level-id"
+repository = "https://github.com/nazar-pc/h264-profile-level-id"
+readme = "readme.md"
 
 [dependencies]
 bitpattern = "0.1.0"

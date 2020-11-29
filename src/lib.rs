@@ -1,3 +1,39 @@
+//! Idiomatic Rust port of <https://github.com/ibc/h264-profile-level-id> by Iñaki Baz Castillo.
+//!
+//! Rust utility to process [H264](https://tools.ietf.org/html/rfc6184) `profile-level-id` values based on Google's [libwebrtc](https://chromium.googlesource.com/external/webrtc/+/refs/heads/master/media/base/h264_profile_level_id.h) C++ code.
+//!
+//! Basic usage example:
+//! ```rust
+//! use h264_profile_level_id::{Profile, Level, ProfileLevelId};
+//!
+//! fn main () {
+//!     let profile_level_id: ProfileLevelId = "42e01f".parse().unwrap();
+//!
+//!     assert_eq!(profile_level_id.profile(), Profile::ConstrainedBaseline);
+//!     assert_eq!(profile_level_id.level(), Level::Level31);
+//!
+//!     let s = profile_level_id.to_string();
+//!
+//!     assert_eq!(s.as_str(), "42e01f");
+//!
+//!     let local_profile_level_id = "42e01f".parse::<ProfileLevelId>().ok();
+//!     let local_level_asymmetry_allowed = true;
+//!
+//!     let remote_profile_level_id = "42e015".parse::<ProfileLevelId>().ok();
+//!     let remote_level_asymmetry_allowed = true;
+//!
+//!     assert_eq!(
+//!         h264_profile_level_id::generate_profile_level_id_for_answer(
+//!             local_profile_level_id,
+//!             local_level_asymmetry_allowed,
+//!             remote_profile_level_id,
+//!             remote_level_asymmetry_allowed
+//!         ),
+//!         Ok("42e01f".parse::<ProfileLevelId>().unwrap()),
+//!     );
+//! }
+//! ```
+
 use bitpattern::bitpattern;
 use log::debug;
 use once_cell::sync::OnceCell;
@@ -17,39 +53,39 @@ pub enum Profile {
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 // All values are equal to ten times the level number, except level 1b which is special.
 pub enum Level {
-    /// 1b
+    /// Level 1b
     Level1b = 0,
-    /// 1
+    /// Level 1
     Level1 = 10,
-    /// 1.1
+    /// Level 1.1
     Level11 = 11,
-    /// 1.2
+    /// Level 1.2
     Level12 = 12,
-    /// 1.3
+    /// Level 1.3
     Level13 = 13,
-    /// 2
+    /// Level 2
     Level2 = 20,
-    /// 2.1
+    /// Level 2.1
     Level21 = 21,
-    /// 2.2
+    /// Level 2.2
     Level22 = 22,
-    /// 3
+    /// Level 3
     Level3 = 30,
-    /// 3.1
+    /// Level 3.1
     Level31 = 31,
-    /// 3.2
+    /// Level 3.2
     Level32 = 32,
-    /// 4
+    /// Level 4
     Level4 = 40,
-    /// 4.1
+    /// Level 4.1
     Level41 = 41,
-    /// 4.2
+    /// Level 4.2
     Level42 = 42,
-    /// 5
+    /// Level 5
     Level5 = 50,
-    /// 5.1
+    /// Level 5.1
     Level51 = 51,
-    /// 5.2
+    /// Level 5.2
     Level52 = 52,
 }
 
@@ -109,6 +145,7 @@ pub enum ParseProfileLevelIdError {
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 // Private fields make sure we don't have to worry about incorrect combinations of profile and level
 // that are provided from the outside, keeping only valid invariants
+/// A container encapsulating both H264 profile and level as parsed from a `profile-level-id` string
 pub struct ProfileLevelId {
     profile: Profile,
     level: Level,
@@ -276,8 +313,8 @@ impl ToString for ProfileLevelId {
     }
 }
 
-/// Returns `true` if the parameters have the same H264 profile, i.e. the same H264 profile
-/// (Baseline, High, etc).
+/// Returns `true` if string `profile-level-id` correspond to the same H264 profile (Baseline, High,
+/// etc).
 pub fn is_same_profile(
     local_profile_level_id: Option<&str>,
     remote_profile_level_id: Option<&str>,
@@ -306,28 +343,29 @@ pub enum GenerateProfileLevelIdForAnswerError {
     ProfileMismatch,
 }
 
-/// Generate codec parameters that will be used as answer in an SDP negotiation
-/// based on local supported parameters and remote offered parameters. Both
-/// local_supported_params and remote_offered_params represent sendrecv media
-/// descriptions, i.e they are a mix of both encode and decode capabilities. In
-/// theory, when the profile in local_supported_params represent a strict superset
-/// of the profile in remote_offered_params, we could limit the profile in the
-/// answer to the profile in remote_offered_params.
+/// Generate codec parameters that will be used as answer in an SDP negotiation based on local
+/// supported parameters and remote offered parameters. Both `local_profile_level_id` and
+/// `remote_profile_level_id` represent sendrecv media descriptions, i.e they are a mix of both
+/// encode and decode capabilities. In theory, when the profile in `local_profile_level_id`
+/// represent a strict superset of the profile in `remote_profile_level_id`, we could limit the
+/// profile in the answer to the profile in `remote_profile_level_id`.
 ///
-/// However, to simplify the code, each supported H264 profile should be listed
-/// explicitly in the list of local supported codecs, even if they are redundant.
-/// Then each local codec in the list should be tested one at a time against the
-/// remote codec, and only when the profiles are equal should this function be
-/// called. Therefore, this function does not need to handle profile intersection,
-/// and the profile of local_supported_params and remote_offered_params must be
-/// equal before calling this function. The parameters that are used when
-/// negotiating are the level part of profile-level-id and level-asymmetry-allowed.
+/// However, to simplify the code, each supported H264 profile should be listed explicitly in the
+/// list of local supported codecs, even if they are redundant. Then each local codec in the list
+/// should be tested one at a time against the remote codec, and only when the profiles are equal
+/// should this function be called. Therefore, this function does not need to handle profile
+/// intersection, and the profile of `local_profile_level_id` and `remote_profile_level_id` must be
+/// equal before calling this function. The parameters that are used when negotiating are the level
+/// part of `profile-level-id` and `level-asymmetry-allowed`.
+///
+/// If both `local_profile_level_id` and `remote_profile_level_id` are `None`, default value for
+/// [`ProfileLevelId`] will be returned.
 pub fn generate_profile_level_id_for_answer(
     local_profile_level_id: Option<ProfileLevelId>,
     local_level_asymmetry_allowed: bool,
     remote_profile_level_id: Option<ProfileLevelId>,
     remote_level_asymmetry_allowed: bool,
-) -> Result<Option<ProfileLevelId>, GenerateProfileLevelIdForAnswerError> {
+) -> Result<ProfileLevelId, GenerateProfileLevelIdForAnswerError> {
     // If both local and remote params do not contain profile-level-id, they are
     // both using the default profile. In this case, don't return anything.
     let (local_profile_level_id, remote_profile_level_id) =
@@ -338,7 +376,7 @@ pub fn generate_profile_level_id_for_answer(
                     remote params",
                 );
 
-                return Ok(None);
+                return Ok(ProfileLevelId::default());
             }
             (Some(local_profile_level_id), Some(remote_profile_level_id)) => {
                 if local_profile_level_id.profile != remote_profile_level_id.profile {
@@ -372,10 +410,10 @@ pub fn generate_profile_level_id_for_answer(
     );
 
     // Return the resulting profile-level-id for the answer parameters.
-    Ok(Some(ProfileLevelId {
+    Ok(ProfileLevelId {
         profile: local_profile_level_id.profile,
         level: answer_level,
-    }))
+    })
 }
 
 // Compare H264 levels and handle the level 1b case.
@@ -425,23 +463,23 @@ mod tests {
     fn parsing_level() {
         assert_eq!(
             "42e01f".parse::<ProfileLevelId>().unwrap().level,
-            Level::Level31
+            Level::Level31,
         );
         assert_eq!(
             "42e00b".parse::<ProfileLevelId>().unwrap().level,
-            Level::Level11
+            Level::Level11,
         );
         assert_eq!(
             "42f00b".parse::<ProfileLevelId>().unwrap().level,
-            Level::Level1b
+            Level::Level1b,
         );
         assert_eq!(
             "42C02A".parse::<ProfileLevelId>().unwrap().level,
-            Level::Level42
+            Level::Level42,
         );
         assert_eq!(
             "640c34".parse::<ProfileLevelId>().unwrap().level,
-            Level::Level52
+            Level::Level52,
         );
     }
 
@@ -649,7 +687,7 @@ mod tests {
     fn generate_profile_level_id_for_answer_empty() {
         assert_eq!(
             generate_profile_level_id_for_answer(None, false, None, false),
-            Ok(None),
+            Ok(ProfileLevelId::default()),
         );
     }
 
@@ -660,11 +698,11 @@ mod tests {
 
         assert_eq!(
             generate_profile_level_id_for_answer(low_level, false, high_level, false),
-            Ok("42e015".parse::<ProfileLevelId>().ok()),
+            Ok("42e015".parse::<ProfileLevelId>().unwrap()),
         );
         assert_eq!(
             generate_profile_level_id_for_answer(high_level, false, low_level, false),
-            Ok("42e015".parse::<ProfileLevelId>().ok()),
+            Ok("42e015".parse::<ProfileLevelId>().unwrap()),
         );
     }
 
@@ -683,7 +721,7 @@ mod tests {
                 remote_profile_level_id,
                 remote_level_asymmetry_allowed
             ),
-            Ok("42e01f".parse::<ProfileLevelId>().ok()),
+            Ok("42e01f".parse::<ProfileLevelId>().unwrap()),
         );
     }
 }
