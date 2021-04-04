@@ -195,11 +195,11 @@ pub struct ProfileLevelId {
 }
 
 impl ProfileLevelId {
-    pub fn profile(&self) -> Profile {
+    pub const fn profile(&self) -> Profile {
         self.profile
     }
 
-    pub fn level(&self) -> Level {
+    pub const fn level(&self) -> Level {
         self.level
     }
 }
