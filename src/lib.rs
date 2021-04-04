@@ -36,10 +36,53 @@
 
 use bitpattern::bitpattern;
 use log::debug;
-use once_cell::sync::OnceCell;
 use std::convert::{TryFrom, TryInto};
 use std::str::FromStr;
 use thiserror::Error;
+
+// This is from https://tools.ietf.org/html/rfc6184#section-8.1.
+const PROFILE_LEVEL_PATTERNS: [ProfilePattern; 8] = [
+    ProfilePattern {
+        profile_idc: 0x42,
+        profile_iop: |input| bitpattern!("?1??0000", input).is_some(),
+        profile: Profile::ConstrainedBaseline,
+    },
+    ProfilePattern {
+        profile_idc: 0x4D,
+        profile_iop: |input| bitpattern!("1???0000", input).is_some(),
+        profile: Profile::ConstrainedBaseline,
+    },
+    ProfilePattern {
+        profile_idc: 0x58,
+        profile_iop: |input| bitpattern!("11??0000", input).is_some(),
+        profile: Profile::ConstrainedBaseline,
+    },
+    ProfilePattern {
+        profile_idc: 0x42,
+        profile_iop: |input| bitpattern!("?0??0000", input).is_some(),
+        profile: Profile::Baseline,
+    },
+    ProfilePattern {
+        profile_idc: 0x58,
+        profile_iop: |input| bitpattern!("10??0000", input).is_some(),
+        profile: Profile::Baseline,
+    },
+    ProfilePattern {
+        profile_idc: 0x4D,
+        profile_iop: |input| bitpattern!("0?0?0000", input).is_some(),
+        profile: Profile::Main,
+    },
+    ProfilePattern {
+        profile_idc: 0x64,
+        profile_iop: |input| bitpattern!("00000000", input).is_some(),
+        profile: Profile::High,
+    },
+    ProfilePattern {
+        profile_idc: 0x64,
+        profile_iop: |input| bitpattern!("00001100", input).is_some(),
+        profile: Profile::ConstrainedHigh,
+    },
+];
 
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum Profile {
@@ -223,55 +266,8 @@ impl FromStr for ProfileLevelId {
             }
         };
 
-        static PROFILE_LEVEL_PATTERNS: OnceCell<[ProfilePattern; 8]> = OnceCell::new();
-        let profile_level_pattern = PROFILE_LEVEL_PATTERNS.get_or_init(|| {
-            // This is from https://tools.ietf.org/html/rfc6184#section-8.1.
-            [
-                ProfilePattern {
-                    profile_idc: 0x42,
-                    profile_iop: |input| bitpattern!("?1??0000", input).is_some(),
-                    profile: Profile::ConstrainedBaseline,
-                },
-                ProfilePattern {
-                    profile_idc: 0x4D,
-                    profile_iop: |input| bitpattern!("1???0000", input).is_some(),
-                    profile: Profile::ConstrainedBaseline,
-                },
-                ProfilePattern {
-                    profile_idc: 0x58,
-                    profile_iop: |input| bitpattern!("11??0000", input).is_some(),
-                    profile: Profile::ConstrainedBaseline,
-                },
-                ProfilePattern {
-                    profile_idc: 0x42,
-                    profile_iop: |input| bitpattern!("?0??0000", input).is_some(),
-                    profile: Profile::Baseline,
-                },
-                ProfilePattern {
-                    profile_idc: 0x58,
-                    profile_iop: |input| bitpattern!("10??0000", input).is_some(),
-                    profile: Profile::Baseline,
-                },
-                ProfilePattern {
-                    profile_idc: 0x4D,
-                    profile_iop: |input| bitpattern!("0?0?0000", input).is_some(),
-                    profile: Profile::Main,
-                },
-                ProfilePattern {
-                    profile_idc: 0x64,
-                    profile_iop: |input| bitpattern!("00000000", input).is_some(),
-                    profile: Profile::High,
-                },
-                ProfilePattern {
-                    profile_idc: 0x64,
-                    profile_iop: |input| bitpattern!("00001100", input).is_some(),
-                    profile: Profile::ConstrainedHigh,
-                },
-            ]
-        });
-
         // Parse profile_idc/profile_iop into a Profile enum.
-        for pattern in profile_level_pattern.iter() {
+        for pattern in PROFILE_LEVEL_PATTERNS.iter() {
             if profile_idc == pattern.profile_idc && (pattern.profile_iop)(profile_iop) {
                 return Ok(ProfileLevelId {
                     profile: pattern.profile,
