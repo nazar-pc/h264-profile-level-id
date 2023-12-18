@@ -41,7 +41,7 @@ use std::str::FromStr;
 use thiserror::Error;
 
 // This is from https://tools.ietf.org/html/rfc6184#section-8.1.
-const PROFILE_LEVEL_PATTERNS: [ProfilePattern; 8] = [
+const PROFILE_LEVEL_PATTERNS: [ProfilePattern; 9] = [
     ProfilePattern {
         profile_idc: 0x42,
         profile_iop: |input| bitpattern!("?1??0000", input).is_some(),
