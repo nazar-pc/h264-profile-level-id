@@ -41,7 +41,7 @@ use std::str::FromStr;
 use thiserror::Error;
 
 // This is from https://tools.ietf.org/html/rfc6184#section-8.1.
-const PROFILE_LEVEL_PATTERNS: [ProfilePattern; 8] = [
+const PROFILE_LEVEL_PATTERNS: [ProfilePattern; 9] = [
     ProfilePattern {
         profile_idc: 0x42,
         profile_iop: |input| bitpattern!("?1??0000", input).is_some(),
@@ -82,6 +82,11 @@ const PROFILE_LEVEL_PATTERNS: [ProfilePattern; 8] = [
         profile_iop: |input| bitpattern!("00001100", input).is_some(),
         profile: Profile::ConstrainedHigh,
     },
+    ProfilePattern {
+        profile_idc: 0xF4,
+        profile_iop: |input| bitpattern!("00000000", input).is_some(),
+        profile: Profile::PredictiveHigh444,
+    },
 ];
 
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
@@ -91,6 +96,7 @@ pub enum Profile {
     Main = 3,
     ConstrainedHigh = 4,
     High = 5,
+    PredictiveHigh444 = 6,
 }
 
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
@@ -303,6 +309,7 @@ impl ToString for ProfileLevelId {
             Profile::Main => "4d00",
             Profile::ConstrainedHigh => "640c",
             Profile::High => "6400",
+            Profile::PredictiveHigh444 => "f400",
         };
 
         format!("{}{:02x}", profile_idc_iop_string, self.level as u8)
