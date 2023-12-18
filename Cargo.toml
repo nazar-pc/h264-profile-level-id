@@ -1,6 +1,6 @@
 [package]
 name = "h264-profile-level-id"
-version = "0.1.1"
+version = "0.2.0"
 description = "Utility to process H264 profile-level-id values"
 authors = ["Nazar Mokrynskyi <nazar@mokrynskyi.com>"]
 edition = "2018"
